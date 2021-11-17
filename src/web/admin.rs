@@ -1,6 +1,7 @@
 use salvo::{
     http::{HttpError, StatusCode},
     prelude::{async_trait, fn_handler},
+    routing::FlowCtrl,
     Depot, Request, Response, Router, Writer,
 };
 use tera::Context;
@@ -13,30 +14,44 @@ use crate::{
 };
 
 #[fn_handler]
-async fn block_no_admin(depot: &mut Depot) -> Result<(), HttpError> {
-    match depot.try_borrow::<Option<i16>>(PERMISSION) {
-        Some(Some(0)) => Ok(()),
-        _ => Err(from_code(StatusCode::FORBIDDEN, "No permission")),
+async fn block_no_admin(
+    req: &mut Request,
+    depot: &mut Depot,
+    res: &mut Response,
+    ctrl: &mut FlowCtrl,
+) -> Result<(), HttpError> {
+    let permission = {
+        depot
+            .get::<Option<i16>>(PERMISSION)
+            .map(|a| a.map(|b| b == 0))
+            .flatten()
+            .unwrap_or_default()
+    };
+    if permission {
+        ctrl.call_next(req, depot, res).await;
+        Ok(())
+    } else {
+        Err(from_code(StatusCode::FORBIDDEN, "No permission"))
     }
 }
 
 #[fn_handler]
 async fn admin(depot: &mut Depot, res: &mut Response) {
-    let web = depot.take::<Context>(WEB);
+    let web = depot.remove::<Context>(WEB).unwrap();
 
     render(res, "admin/admin.html", &web)
 }
 
 #[fn_handler]
 async fn admin_list(depot: &mut Depot, res: &mut Response) {
-    let web = depot.take::<Context>(WEB);
+    let web = depot.remove::<Context>(WEB).unwrap();
 
     render(res, "admin/admin_list.html", &web)
 }
 
 #[fn_handler]
 async fn unpublished(depot: &mut Depot, res: &mut Response) {
-    let web = depot.take::<Context>(WEB);
+    let web = depot.remove::<Context>(WEB).unwrap();
 
     render(res, "admin/unpublished_list.html", &web)
 }
@@ -44,7 +59,7 @@ async fn unpublished(depot: &mut Depot, res: &mut Response) {
 #[tracing::instrument]
 #[fn_handler]
 async fn new_(depot: &mut Depot, res: &mut Response) {
-    let mut web = depot.take::<Context>(WEB);
+    let mut web = depot.remove::<Context>(WEB).unwrap();
 
     match Tags::view_list_tag().await {
         Ok(tags_) => web.insert("tags", &tags_),
@@ -61,7 +76,7 @@ async fn admin_view_article(
     res: &mut Response,
 ) -> Result<(), HttpError> {
     let id = parse_query::<uuid::Uuid>(&req, "id")?;
-    let mut web = depot.take::<Context>(WEB);
+    let mut web = depot.remove::<Context>(WEB).unwrap();
 
     match ArticlesWithTag::query_article(id, true).await {
         Ok(data) => web.insert("article", &data),
@@ -81,7 +96,7 @@ async fn article_edit(
     res: &mut Response,
 ) -> Result<(), HttpError> {
     let id = parse_query::<String>(&req, "id")?;
-    let mut web = depot.take::<Context>(WEB);
+    let mut web = depot.remove::<Context>(WEB).unwrap();
     web.insert("id", &id);
 
     match Tags::view_list_tag().await {
@@ -95,28 +110,28 @@ async fn article_edit(
 
 #[fn_handler]
 async fn tags(depot: &mut Depot, res: &mut Response) {
-    let web = depot.take::<Context>(WEB);
+    let web = depot.remove::<Context>(WEB).unwrap();
 
     render(res, "admin/tags.html", &web)
 }
 
 #[fn_handler]
 async fn users(depot: &mut Depot, res: &mut Response) {
-    let web = depot.take::<Context>(WEB);
+    let web = depot.remove::<Context>(WEB).unwrap();
 
     render(res, "admin/users.html", &web)
 }
 
 #[fn_handler]
 async fn visitor_ip_log(depot: &mut Depot, res: &mut Response) {
-    let web = depot.take::<Context>(WEB);
+    let web = depot.remove::<Context>(WEB).unwrap();
 
     render(res, "admin/ip.html", &web)
 }
 
 #[fn_handler]
 async fn notify(depot: &mut Depot, res: &mut Response) {
-    let web = depot.take::<Context>(WEB);
+    let web = depot.remove::<Context>(WEB).unwrap();
 
     render(res, "admin/notify.html", &web)
 }
@@ -127,7 +142,7 @@ impl Routers for Admin {
     fn build(self) -> Vec<Router> {
         vec![Router::new()
             .path("admin")
-            .before(block_no_admin)
+            .hoop(block_no_admin)
             // http {ip}/admin
             .get(admin)
             // http {ip}/admin/new
